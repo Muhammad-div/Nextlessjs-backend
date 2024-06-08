@@ -1,0 +1,18 @@
+# Some API gateway endpoint are secured by the AWS default authorizer 'aws_iam'
+# Only authenticated user from AWS IAM can interact with the API gateway
+# This file gives authenticated user from AWS Cognito to invoke API gateway.
+
+Resources:
+  CognitoAuthorizedApiPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ${self:custom.stage}-CognitoNotesAuthorizedApiPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "execute-api:Invoke"
+            Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+      Roles:
+        - !ImportValue "${self:custom.sstApp}-CognitoAuthRole"

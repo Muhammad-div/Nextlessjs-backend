@@ -1,0 +1,136 @@
+# You don't need to change the following `service` value for one project.
+# But, when you have multiple projects, it'll have name collision.
+# So, you can replace service name and use an alphanumeric name
+# Please also update the environment variable `PROJECT_NAME` in infra, both name should match
+service: modernmern
+
+custom:
+  # Our stage is based on what is passed in when running serverless
+  # commands. Or falls back to what we have set in the provider section.
+  stage: ${opt:stage, 'offline'}
+  region: ${opt:region, 'us-east-1'}
+  # Name of the SST app that's deploying our infrastructure
+  sstApp: ${self:custom.stage}-${self:service}-infra
+  nodeEnv:
+    offline: "development"
+    staging: "production"
+    prod: "production"
+  noAuth:
+    offline: true
+    staging: false
+    prod: false
+  frontendDomain:
+    offline: "http://localhost:3000"
+    # In serverless 2, this step was automatically done but, serverless>=3.0.0 introduces changes that significantly impacts this step.
+    # FIXME: Update the allowedOrigin to matched the environment variable `FRONTEND_DOMAIN_URL`.
+    staging: "https://example.com"
+    prod: "https://example.com"
+  prismaEngine:
+    offline: "node_modules/.prisma/client/*.node"
+    staging: "node_modules/.prisma/client/libquery_engine-rhel*"
+    prod: "node_modules/.prisma/client/libquery_engine-rhel*"
+
+  esbuild:
+    platform: "node"
+    target: node20
+    sourcemap: linked
+  serverless-offline:
+    httpPort: 4000
+    noPrependStageInUrl: true
+    reloadHandler: true # Set to false when running E2E testing
+    noTimeout: true
+    noAuth: ${self:custom.noAuth.${self:custom.stage}}
+
+provider:
+  name: aws
+  stage: ${self:custom.stage}
+  region: ${self:custom.region}
+  runtime: nodejs20.x
+  memorySize: 512
+  timeout: 10
+  logRetentionInDays: 90
+  logs:
+    httpApi: true
+  httpApi:
+    # metrics: true # Enable if you need
+    cors:
+      allowedOrigins:
+        - ${self:custom.frontendDomain.${self:custom.stage}}
+      allowedHeaders: # Set the default value from Serverless framework, this workaround is needed by serverless-offline
+        - Content-Type
+        - X-Amz-Date
+        - Authorization
+        - X-Api-Key
+        - X-Amz-Security-Token
+        - X-Amz-User-Agent
+
+  iam:
+    role:
+      statements:
+        - Effect: "Allow"
+          Action:
+            - ses:SendRawEmail
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - cognito-idp:ListUsers
+            - cognito-idp:DescribeUserPool
+            - cognito-idp:AdminEnableUser
+            - cognito-idp:AdminDisableUser
+          Resource:
+            - !ImportValue "${self:custom.sstApp}-UserPoolArn"
+
+  environment:
+    STAGE: ${self:custom.stage}
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    NODE_ENV: ${self:custom.nodeEnv.${self:custom.stage}}
+
+functions:
+  app:
+    handler: src/handler.handler
+    # reservedConcurrency: 10 # Enable it if you want to limit the number of concurrent Lambda, the number can be increased or decreased
+    events:
+      - httpApi:
+          path: "/billing/webhook"
+          method: "POST"
+
+      - httpApi:
+          path: "/{proxy+}"
+          method: "GET"
+          authorizer:
+            type: aws_iam
+
+      - httpApi:
+          path: "/{proxy+}"
+          method: "POST"
+          authorizer:
+            type: aws_iam
+
+      - httpApi:
+          path: "/{proxy+}"
+          method: "PUT"
+          authorizer:
+            type: aws_iam
+
+      - httpApi:
+          path: "/{proxy+}"
+          method: "DELETE"
+          authorizer:
+            type: aws_iam
+
+resources:
+  # Cognito Identity Pool Policy
+  - ${file(./aws-resources/cognito-policy.yml)}
+
+package:
+  patterns:
+    - "!**/*.test.ts"
+    - ${self:custom.prismaEngine.${self:custom.stage}}
+    - "node_modules/.prisma/client/schema.prisma"
+  individually: true
+
+plugins:
+  - serverless-dotenv-plugin
+  - serverless-esbuild
+  - serverless-offline-ses-v2
+  - serverless-offline
